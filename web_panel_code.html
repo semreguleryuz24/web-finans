@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="tr">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telefonumu Bul - Finans Ailem</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+        import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
+        import { getFirestore, doc, getDoc, onSnapshot, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+
+        // Firebase config - KENDİ BİLGİLERİNİZLE DEĞİŞTİRİN!
+        const firebaseConfig = {
+            apiKey: "AIzaSyABi-3bOq2N_nekkhn0XVJUNd408QQ5Hdc",  // ← DEĞİŞTİ
+            authDomain: "financialasistant-2b937.firebaseapp.com",
+            projectId: "financialasistant-2b937",
+            storageBucket: "financialasistant-2b937.firebasestorage.app",
+            messagingSenderId: "77567794457",
+            appId: "1:77567794457:web:4cd91c384985a483ed3988",
+            measurementId: "G-ZE5JV8GBWX"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        let map = null;
+        let marker = null;
+        let locationUnsubscribe = null;
+
+        // Auth state dinle
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                document.getElementById('loginSection').classList.add('hidden');
+                document.getElementById('mainContent').classList.remove('hidden');
+                startLocationTracking(user.uid);
+            } else {
+                document.getElementById('loginSection').classList.remove('hidden');
+                document.getElementById('mainContent').classList.add('hidden');
+            }
+        });
+
+        // Login
+        window.handleLogin = async (e) => {
+            e.preventDefault();
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const errorDiv = document.getElementById('loginError');
+
+            try {
+                await signInWithEmailAndPassword(auth, email, password);
+                errorDiv.classList.add('hidden');
+            } catch (error) {
+                errorDiv.textContent = 'Giriş başarısız: ' + error.message;
+                errorDiv.classList.remove('hidden');
+            }
+        };
+
+        // Logout
+        window.handleLogout = () => {
+            signOut(auth);
+            if (locationUnsubscribe) locationUnsubscribe();
+        };
+
+        // Konum takibi başlat
+        function startLocationTracking(userId) {
+            // Haritayı başlat
+            if (!map) {
+                map = L.map('map').setView([41.0082, 28.9784], 13);
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '© OpenStreetMap'
+                }).addTo(map);
+            }
+
+            // Realtime location dinle
+            locationUnsubscribe = onSnapshot(
+                doc(db, 'device_locations', userId),
+                (docSnap) => {
+                    if (docSnap.exists()) {
+                        const data = docSnap.data();
+                        updateMap(data);
+                        updateLocationInfo(data);
+                        document.getElementById('noLocationMessage').classList.add('hidden');
+                        document.getElementById('mapContainer').classList.remove('hidden');
+                    } else {
+                        document.getElementById('noLocationMessage').classList.remove('hidden');
+                        document.getElementById('mapContainer').classList.add('hidden');
+                    }
+                }
+            );
+        }
+
+        // Haritayı güncelle
+        function updateMap(data) {
+            const lat = data.latitude;
+            const lng = data.longitude;
+
+            if (marker) {
+                marker.setLatLng([lat, lng]);
+            } else {
+                marker = L.marker([lat, lng]).addTo(map);
+                marker.bindPopup('📱 Telefonunuz burada!').openPopup();
+            }
+
+            map.setView([lat, lng], 15);
+        }
+
+        // Konum bilgilerini güncelle
+        function updateLocationInfo(data) {
+            const timestamp = data.timestamp?.toDate();
+            const timeDiff = timestamp ? getTimeDifference(timestamp) : 'Bilinmiyor';
+
+            document.getElementById('lastUpdate').textContent = timeDiff;
+            document.getElementById('battery').textContent = data.battery + '%';
+            document.getElementById('accuracy').textContent = '±' + Math.round(data.accuracy) + 'm';
+            document.getElementById('coordinates').textContent =
+                data.latitude.toFixed(6) + ', ' + data.longitude.toFixed(6);
+
+            // Online status
+            const statusBadge = document.getElementById('onlineStatus');
+            if (data.isOnline) {
+                statusBadge.textContent = 'Çevrimiçi';
+                statusBadge.className = 'px-3 py-1 bg-green-100 text-green-800 text-sm font-semibold rounded-full';
+            } else {
+                statusBadge.textContent = 'Çevrimdışı';
+                statusBadge.className = 'px-3 py-1 bg-gray-100 text-gray-800 text-sm font-semibold rounded-full';
+            }
+        }
+
+        // Zaman farkı hesapla
+        function getTimeDifference(date) {
+            const now = new Date();
+            const diff = Math.floor((now - date) / 1000);
+
+            if (diff < 60) return 'Az önce';
+            if (diff < 3600) return Math.floor(diff / 60) + ' dakika önce';
+            if (diff < 86400) return Math.floor(diff / 3600) + ' saat önce';
+            return date.toLocaleString('tr-TR');
+        }
+
+        // Ses çıkart
+        window.handlePlaySound = async () => {
+            const user = auth.currentUser;
+            if (!user) return;
+
+            const btn = document.getElementById('playSoundBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<svg class="animate-spin h-5 w-5 inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Gönderiliyor...';
+
+            try {
+                await setDoc(doc(db, 'device_commands', user.uid), {
+                    command: 'play_sound',
+                    status: 'pending',
+                    timestamp: serverTimestamp()
+                });
+
+                showNotification('Ses çalma komutu gönderildi!', 'success');
+
+                setTimeout(() => {
+                    btn.disabled = false;
+                    btn.innerHTML = '🔊 Ses Çıkart';
+                }, 3000);
+            } catch (error) {
+                showNotification('Hata: ' + error.message, 'error');
+                btn.disabled = false;
+                btn.innerHTML = '🔊 Ses Çıkart';
+            }
+        };
+
+        // Mesaj gönder
+        window.handleSendMessage = async () => {
+            const message = document.getElementById('messageInput').value;
+            if (!message.trim()) {
+                showNotification('Lütfen bir mesaj girin', 'error');
+                return;
+            }
+
+            const user = auth.currentUser;
+            if (!user) return;
+
+            const btn = document.getElementById('sendMessageBtn');
+            btn.disabled = true;
+            btn.textContent = 'Gönderiliyor...';
+
+            try {
+                await setDoc(doc(db, 'device_commands', user.uid), {
+                    command: 'show_message',
+                    message: message,
+                    status: 'pending',
+                    timestamp: serverTimestamp()
+                });
+
+                showNotification('Mesaj gönderildi!', 'success');
+                document.getElementById('messageInput').value = '';
+
+                setTimeout(() => {
+                    btn.disabled = false;
+                    btn.textContent = 'Mesaj Gönder';
+                }, 3000);
+            } catch (error) {
+                showNotification('Hata: ' + error.message, 'error');
+                btn.disabled = false;
+                btn.textContent = 'Mesaj Gönder';
+            }
+        };
+
+        // Yol tarifi
+        window.handleDirections = () => {
+            if (!marker) return;
+            const lat = marker.getLatLng().lat;
+            const lng = marker.getLatLng().lng;
+            window.open(`https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`, '_blank');
+        };
+
+        // Bildirim göster
+        function showNotification(message, type) {
+            const notif = document.getElementById('notification');
+            const notifText = document.getElementById('notificationText');
+
+            notifText.textContent = message;
+
+            if (type === 'success') {
+                notif.className = 'fixed top-4 right-4 bg-green-500 text-white px-6 py-3 rounded-lg shadow-lg';
+            } else {
+                notif.className = 'fixed top-4 right-4 bg-red-500 text-white px-6 py-3 rounded-lg shadow-lg';
+            }
+
+            notif.classList.remove('hidden');
+
+            setTimeout(() => {
+                notif.classList.add('hidden');
+            }, 3000);
+        }
+    </script>
+</head>
+
+<body class="bg-gray-50 min-h-screen">
+
+    <!-- Notification -->
+    <div id="notification" class="hidden fixed top-4 right-4 z-50">
+        <span id="notificationText"></span>
+    </div>
+
+    <!-- Login Section -->
+    <div id="loginSection" class="hidden min-h-screen flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl shadow-xl p-8 max-w-md w-full">
+            <div class="text-center mb-8">
+                <h1 class="text-3xl font-bold text-gray-900 mb-2">📱 Telefonumu Bul</h1>
+                <p class="text-gray-600">Finans Ailem hesabınızla giriş yapın</p>
+            </div>
+
+            <form onsubmit="handleLogin(event)" class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">E-posta</label>
+                    <input type="email" id="email" required
+                        class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        placeholder="ornek@email.com">
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Şifre</label>
+                    <input type="password" id="password" required
+                        class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        placeholder="••••••••">
+                </div>
+
+                <div id="loginError"
+                    class="hidden bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm"></div>
+
+                <button type="submit"
+                    class="w-full bg-gradient-to-r from-blue-600 to-cyan-500 text-white py-3 rounded-lg font-semibold hover:shadow-lg transition">
+                    Giriş Yap
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div id="mainContent" class="hidden">
+        <!-- Header -->
+        <header class="bg-white shadow-sm border-b sticky top-0 z-10">
+            <div class="max-w-7xl mx-auto px-4 py-4">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                        <div
+                            class="w-10 h-10 bg-gradient-to-br from-blue-600 to-cyan-500 rounded-xl flex items-center justify-center">
+                            <span class="text-white text-xl">📱</span>
+                        </div>
+                        <div>
+                            <h1 class="text-xl font-bold text-gray-900">Telefonumu Bul</h1>
+                            <p class="text-sm text-gray-600">Finans Ailem</p>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center gap-4">
+                        <span id="onlineStatus"
+                            class="px-3 py-1 bg-gray-100 text-gray-800 text-sm font-semibold rounded-full">
+                            Yükleniyor...
+                        </span>
+                        <button onclick="handleLogout()" class="text-gray-600 hover:text-gray-900 font-medium">
+                            Çıkış
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <div class="max-w-7xl mx-auto px-4 py-8">
+            <!-- No Location Message -->
+            <div id="noLocationMessage"
+                class="hidden bg-yellow-50 border-2 border-yellow-200 rounded-2xl p-8 text-center">
+                <div class="text-6xl mb-4">📍</div>
+                <h2 class="text-2xl font-bold text-gray-900 mb-2">Konum Bulunamadı</h2>
+                <p class="text-gray-600 mb-4">
+                    Telefonunuzda konum takibi açık olmayabilir veya henüz konum güncellemesi yapılmamış.
+                </p>
+                <p class="text-sm text-gray-500">
+                    Mobil uygulamadan Ayarlar → Cihaz Güvenliği → Konum Takibi'ni açın.
+                </p>
+            </div>
+
+            <!-- Map and Controls -->
+            <div id="mapContainer" class="hidden grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- Map -->
+                <div class="lg:col-span-2">
+                    <div class="bg-white rounded-2xl shadow-lg overflow-hidden">
+                        <div id="map" class="h-[600px]"></div>
+                    </div>
+                </div>
+
+                <!-- Controls Panel -->
+                <div class="space-y-6">
+                    <!-- Location Info -->
+                    <div class="bg-white rounded-2xl shadow-lg p-6">
+                        <h3 class="text-lg font-bold text-gray-900 mb-4">📍 Konum Bilgisi</h3>
+
+                        <div class="space-y-3 text-sm">
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">Son Güncelleme:</span>
+                                <span id="lastUpdate" class="font-semibold text-gray-900">-</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">Pil:</span>
+                                <span id="battery" class="font-semibold text-gray-900">-</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">Hassasiyet:</span>
+                                <span id="accuracy" class="font-semibold text-gray-900">-</span>
+                            </div>
+                            <div class="pt-3 border-t">
+                                <span class="text-gray-600 block mb-1">Koordinatlar:</span>
+                                <span id="coordinates" class="font-mono text-xs text-gray-900">-</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Actions -->
+                    <div class="bg-white rounded-2xl shadow-lg p-6">
+                        <h3 class="text-lg font-bold text-gray-900 mb-4">⚡ Hızlı İşlemler</h3>
+
+                        <div class="space-y-3">
+                            <button id="playSoundBtn" onclick="handlePlaySound()"
+                                class="w-full bg-gradient-to-r from-orange-500 to-amber-500 text-white py-3 rounded-xl font-semibold hover:shadow-lg transition flex items-center justify-center gap-2">
+                                🔊 Ses Çıkart
+                            </button>
+
+                            <button onclick="handleDirections()"
+                                class="w-full bg-gradient-to-r from-blue-600 to-cyan-500 text-white py-3 rounded-xl font-semibold hover:shadow-lg transition">
+                                🗺️ Yol Tarifi Al
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Send Message -->
+                    <div class="bg-white rounded-2xl shadow-lg p-6">
+                        <h3 class="text-lg font-bold text-gray-900 mb-4">💬 Mesaj Gönder</h3>
+
+                        <div class="space-y-3">
+                            <textarea id="messageInput" rows="3"
+                                class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                                placeholder="Bulan kişiye mesaj gönder..."></textarea>
+
+                            <button id="sendMessageBtn" onclick="handleSendMessage()"
+                                class="w-full bg-gradient-to-r from-green-500 to-emerald-500 text-white py-3 rounded-xl font-semibold hover:shadow-lg transition">
+                                Mesaj Gönder
+                            </button>
+                        </div>
+
+                        <p class="text-xs text-gray-500 mt-3">
+                            Mesaj telefon ekranında tam ekran bildirim olarak gösterilir.
+                        </p>
+                    </div>
+
+                    <!-- Info -->
+                    <div class="bg-blue-50 border-2 border-blue-200 rounded-xl p-4">
+                        <div class="flex gap-3">
+                            <div class="text-blue-600 text-xl">💡</div>
+                            <div class="text-sm text-blue-900">
+                                <p class="font-semibold mb-1">İpucu:</p>
+                                <p>Ses çıkart özelliği sessiz modda bile çalışır. Telefonunuz yakındaysa bu özelliği
+                                    kullanarak kolayca bulabilirsiniz.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</body>
+
+</html>
